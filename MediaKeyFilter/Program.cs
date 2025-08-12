@@ -1,71 +1,86 @@
 using System;
-using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
-using System.Threading;
 using WindowsMediaController;
 
 static class Program
 {
     private static readonly MediaManager mediaManager = new();
     private static MediaManager.MediaSession? lastAllowedSession;
-    private static readonly NativeMethods.LowLevelKeyboardProc hookProc = HookCallback;
-    private static IntPtr hookId = IntPtr.Zero;
-    private static readonly ManualResetEvent exitEvent = new(false);
 
     static void Main()
     {
         mediaManager.Start();
-        hookId = NativeMethods.SetHook(hookProc);
 
-        Console.CancelKeyPress += (_, e) => { e.Cancel = true; exitEvent.Set(); };
+        // Register media keys as global hotkeys so we can intercept them before SMTC
+        NativeMethods.RegisterHotKey(IntPtr.Zero, 1, 0, NativeMethods.VK_MEDIA_PLAY_PAUSE);
+        NativeMethods.RegisterHotKey(IntPtr.Zero, 2, 0, NativeMethods.VK_MEDIA_NEXT_TRACK);
+        NativeMethods.RegisterHotKey(IntPtr.Zero, 3, 0, NativeMethods.VK_MEDIA_PREV_TRACK);
+
+        Console.CancelKeyPress += (_, e) => { e.Cancel = true; NativeMethods.PostQuitMessage(0); };
         AppDomain.CurrentDomain.ProcessExit += (_, __) => Cleanup();
 
         Console.WriteLine("MediaKeyFilter running. Press Ctrl+C to exit.");
-        exitEvent.WaitOne();
+
+        NativeMethods.MSG msg;
+        while (NativeMethods.GetMessage(out msg, IntPtr.Zero, 0, 0))
+        {
+            if (msg.message == NativeMethods.WM_HOTKEY)
+            {
+                HandleKey(msg.wParam.ToInt32());
+            }
+            else
+            {
+                NativeMethods.TranslateMessage(ref msg);
+                NativeMethods.DispatchMessage(ref msg);
+            }
+        }
+
         Cleanup();
+    }
+
+    private static void HandleKey(int id)
+    {
+        int vk = id switch
+        {
+            1 => NativeMethods.VK_MEDIA_PLAY_PAUSE,
+            2 => NativeMethods.VK_MEDIA_NEXT_TRACK,
+            3 => NativeMethods.VK_MEDIA_PREV_TRACK,
+            _ => 0
+        };
+        if (vk == 0)
+            return;
+
+        var focused = mediaManager.GetFocusedSession();
+        var exeName = focused != null ? Path.GetFileName(focused.Id) : "<none>";
+
+        if (focused != null && exeName.Equals("msedgewebview2.exe", StringComparison.OrdinalIgnoreCase))
+        {
+            Console.WriteLine($"Blocked {exeName} {vk}");
+            if (lastAllowedSession != null)
+            {
+                SendCommand(lastAllowedSession, vk);
+            }
+        }
+        else if (focused != null)
+        {
+            lastAllowedSession = focused;
+            Console.WriteLine($"Passed {exeName} {vk}");
+            SendCommand(focused, vk);
+        }
+        else if (lastAllowedSession != null)
+        {
+            Console.WriteLine($"No focused session, forwarding {vk}");
+            SendCommand(lastAllowedSession, vk);
+        }
     }
 
     private static void Cleanup()
     {
-        if (hookId != IntPtr.Zero)
-        {
-            NativeMethods.UnhookWindowsHookEx(hookId);
-            hookId = IntPtr.Zero;
-        }
+        NativeMethods.UnregisterHotKey(IntPtr.Zero, 1);
+        NativeMethods.UnregisterHotKey(IntPtr.Zero, 2);
+        NativeMethods.UnregisterHotKey(IntPtr.Zero, 3);
         mediaManager.Dispose();
-    }
-
-    private static IntPtr HookCallback(int nCode, IntPtr wParam, IntPtr lParam)
-    {
-        if (nCode >= 0 && wParam == (IntPtr)NativeMethods.WM_KEYDOWN)
-        {
-            int vkCode = Marshal.ReadInt32(lParam);
-            if (vkCode == NativeMethods.VK_MEDIA_PLAY_PAUSE ||
-                vkCode == NativeMethods.VK_MEDIA_NEXT_TRACK ||
-                vkCode == NativeMethods.VK_MEDIA_PREV_TRACK)
-            {
-                var focused = mediaManager.GetFocusedSession();
-                var exeName = focused != null ? Path.GetFileName(focused.Id) : "<none>";
-
-                if (focused != null && exeName.Equals("msedgewebview2.exe", StringComparison.OrdinalIgnoreCase))
-                {
-                    Console.WriteLine($"Blocked {exeName} {vkCode}");
-                    if (lastAllowedSession != null)
-                    {
-                        SendCommand(lastAllowedSession, vkCode);
-                    }
-                    return (IntPtr)1;
-                }
-                else
-                {
-                    if (focused != null)
-                        lastAllowedSession = focused;
-                    Console.WriteLine($"Passed {exeName} {vkCode}");
-                }
-            }
-        }
-        return NativeMethods.CallNextHookEx(hookId, nCode, wParam, lParam);
     }
 
     private static void SendCommand(MediaManager.MediaSession session, int vk)
@@ -88,36 +103,37 @@ static class Program
         }
     }
 
-
     private static class NativeMethods
     {
         public const int VK_MEDIA_NEXT_TRACK = 0xB0;
         public const int VK_MEDIA_PREV_TRACK = 0xB1;
         public const int VK_MEDIA_PLAY_PAUSE = 0xB3;
-        public const int WM_KEYDOWN = 0x0100;
-        private const int WH_KEYBOARD_LL = 13;
+        public const int WM_HOTKEY = 0x0312;
 
-        public delegate IntPtr LowLevelKeyboardProc(int nCode, IntPtr wParam, IntPtr lParam);
-
-        public static IntPtr SetHook(LowLevelKeyboardProc proc)
+        [StructLayout(LayoutKind.Sequential)]
+        public struct POINT
         {
-            using var curProcess = Process.GetCurrentProcess();
-            using var curModule = curProcess.MainModule!;
-            return SetWindowsHookEx(WH_KEYBOARD_LL, proc, GetModuleHandle(curModule.ModuleName), 0);
+            public int x;
+            public int y;
         }
 
-        [DllImport("user32.dll", CharSet = CharSet.Auto, SetLastError = true)]
-        public static extern IntPtr SetWindowsHookEx(int idHook, LowLevelKeyboardProc lpfn, IntPtr hMod, uint dwThreadId);
+        [StructLayout(LayoutKind.Sequential)]
+        public struct MSG
+        {
+            public IntPtr hwnd;
+            public uint message;
+            public IntPtr wParam;
+            public IntPtr lParam;
+            public uint time;
+            public POINT pt;
+            public uint lPrivate;
+        }
 
-        [DllImport("user32.dll", CharSet = CharSet.Auto, SetLastError = true)]
-        [return: MarshalAs(UnmanagedType.Bool)]
-        public static extern bool UnhookWindowsHookEx(IntPtr hhk);
-
-        [DllImport("user32.dll", CharSet = CharSet.Auto, SetLastError = true)]
-        public static extern IntPtr CallNextHookEx(IntPtr hhk, int nCode, IntPtr wParam, IntPtr lParam);
-
-        [DllImport("kernel32.dll", CharSet = CharSet.Auto)]
-        public static extern IntPtr GetModuleHandle(string lpModuleName);
+        [DllImport("user32.dll")] public static extern bool RegisterHotKey(IntPtr hWnd, int id, uint fsModifiers, int vk);
+        [DllImport("user32.dll")] public static extern bool UnregisterHotKey(IntPtr hWnd, int id);
+        [DllImport("user32.dll")] public static extern bool GetMessage(out MSG lpMsg, IntPtr hWnd, uint wMsgFilterMin, uint wMsgFilterMax);
+        [DllImport("user32.dll")] public static extern bool TranslateMessage([In] ref MSG lpMsg);
+        [DllImport("user32.dll")] public static extern IntPtr DispatchMessage([In] ref MSG lpMsg);
+        [DllImport("user32.dll")] public static extern void PostQuitMessage(int nExitCode);
     }
 }
-
