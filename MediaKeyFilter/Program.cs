@@ -88,6 +88,7 @@ static class Program
         }
     }
 
+
     private static class NativeMethods
     {
         public const int VK_MEDIA_NEXT_TRACK = 0xB0;
