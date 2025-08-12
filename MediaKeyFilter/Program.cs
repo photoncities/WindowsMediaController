@@ -73,7 +73,11 @@ static class Program
         switch (vk)
         {
             case NativeMethods.VK_MEDIA_PLAY_PAUSE:
-                _ = session.ControlSession.TryPlayPauseAsync();
+                var controls = session.ControlSession.GetPlaybackInfo().Controls;
+                if (controls.IsPauseEnabled == true)
+                    _ = session.ControlSession.TryPauseAsync();
+                else if (controls.IsPlayEnabled == true)
+                    _ = session.ControlSession.TryPlayAsync();
                 break;
             case NativeMethods.VK_MEDIA_NEXT_TRACK:
                 _ = session.ControlSession.TrySkipNextAsync();
@@ -83,6 +87,7 @@ static class Program
                 break;
         }
     }
+
 
     private static class NativeMethods
     {
