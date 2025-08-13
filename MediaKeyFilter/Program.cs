@@ -9,6 +9,8 @@ static class Program
     private static MediaManager.MediaSession? lastAllowedSession;
     private static IntPtr hwnd;
 
+
+
     static void Main()
     {
         mediaManager.Start();
@@ -33,6 +35,7 @@ static class Program
         };
         NativeMethods.RegisterRawInputDevices(rid, (uint)rid.Length, (uint)Marshal.SizeOf<NativeMethods.RAWINPUTDEVICE>());
 
+
         Console.CancelKeyPress += (_, e) => { e.Cancel = true; NativeMethods.PostQuitMessage(0); };
         AppDomain.CurrentDomain.ProcessExit += (_, __) => Cleanup();
 
@@ -45,10 +48,12 @@ static class Program
             {
                 HandleKey(msg.wParam.ToInt32());
             }
+
             else if (msg.message == NativeMethods.WM_INPUT)
             {
                 HandleRawInput(msg.lParam);
             }
+
             else
             {
                 NativeMethods.TranslateMessage(ref msg);
@@ -97,9 +102,11 @@ static class Program
 
     private static void Cleanup()
     {
+
         NativeMethods.UnregisterHotKey(hwnd, 1);
         NativeMethods.UnregisterHotKey(hwnd, 2);
         NativeMethods.UnregisterHotKey(hwnd, 3);
+
         mediaManager.Dispose();
     }
 
@@ -174,6 +181,7 @@ static class Program
         public const int VK_MEDIA_PREV_TRACK = 0xB1;
         public const int VK_MEDIA_PLAY_PAUSE = 0xB3;
         public const int WM_HOTKEY = 0x0312;
+
         public const int WM_INPUT = 0x00FF;
         public const uint RID_INPUT = 0x10000003;
         public const uint RIM_TYPEHID = 2;
@@ -204,6 +212,7 @@ static class Program
             public uint lPrivate;
         }
 
+
         [StructLayout(LayoutKind.Sequential)]
         public struct RAWINPUTDEVICE
         {
@@ -228,8 +237,10 @@ static class Program
         [DllImport("user32.dll")] public static extern bool TranslateMessage([In] ref MSG lpMsg);
         [DllImport("user32.dll")] public static extern IntPtr DispatchMessage([In] ref MSG lpMsg);
         [DllImport("user32.dll")] public static extern void PostQuitMessage(int nExitCode);
+
         [DllImport("user32.dll")] public static extern bool RegisterRawInputDevices(RAWINPUTDEVICE[] pRawInputDevices, uint uiNumDevices, uint cbSize);
         [DllImport("user32.dll")] public static extern uint GetRawInputData(IntPtr hRawInput, uint uiCommand, IntPtr pData, ref uint pcbSize, uint cbSizeHeader);
         [DllImport("kernel32.dll")] public static extern IntPtr GetConsoleWindow();
+
     }
 }
